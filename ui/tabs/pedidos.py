@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 from datetime import date, datetime, timedelta
-from config.settings import COLORS, COL_CN, COL_LAB, COL_NOMBRE, COL_STOCK
+from config.settings import APP_NAME, COLORS, COL_CN, COL_LAB, COL_NOMBRE, COL_STOCK
 from core.business import calcular_health_score, calcular_roturas, calcular_stock_zombie, cargar_calendario_farmacia, cargar_perfil_farmacia, cargar_productos_protegidos, cargar_reglas_surtido, generar_panel_surtido, generar_pedido_cobertura, generar_pedido_presupuesto, imputar_stockouts, obtener_ventas_media, registrar_promociones_pedido, registrar_snapshot_kpi, validar_surtido_pedido
 from core.network import MARGEN_SEGURIDAD_DIAS, registrar_pedido_confirmado
 from ml.engine import MESES_DESFASE_AVISO, ML_AVAILABLE, construir_features_futuras, generar_pedido_ensemble, generar_pedido_ml, obtener_modelo_cacheado
@@ -184,7 +184,7 @@ def modulo_generador_pedidos():
             st.download_button(
                 f"\U0001f4e5 Descargar Pedido {lab_txt} (.xlsx)",
                 data=exportar_pedido_excel(df_ped),
-                file_name=f"PharmaSmart_{lab_txt}_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+                file_name=f"{APP_NAME}_{lab_txt}_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 type="primary", width='stretch')
         with col_confirm:

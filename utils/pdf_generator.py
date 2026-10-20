@@ -1,6 +1,6 @@
 from fpdf import FPDF
 from datetime import datetime
-from config.settings import VERSION
+from config.settings import APP_NAME, VERSION
 
 def generar_informe_pdf(farmacia_nombre, hs, n_zombies, valor_zombie, n_uvi, valor_uvi,
                        n_roturas, coste_oportunidad, ahorro_acum, rotacion_media, benchmark):
@@ -12,7 +12,7 @@ def generar_informe_pdf(farmacia_nombre, hs, n_zombies, valor_zombie, n_uvi, val
     # Titulo
     pdf.set_font("Helvetica", "B", 22)
     pdf.set_text_color(0, 102, 255)
-    pdf.cell(0, 12, "PharmaSmart - Informe de Estado", new_x="LMARGIN", new_y="NEXT")
+    pdf.cell(0, 12, f"{APP_NAME} - Informe de Estado", new_x="LMARGIN", new_y="NEXT")
     pdf.set_draw_color(0, 196, 154)
     pdf.set_line_width(1)
     pdf.line(10, pdf.get_y(), 200, pdf.get_y())
@@ -61,7 +61,7 @@ def generar_informe_pdf(farmacia_nombre, hs, n_zombies, valor_zombie, n_uvi, val
     resumen = [
         f"Capital inmovilizado en productos sin movimiento: {valor_zombie + valor_uvi:,.2f} EUR",
         f"Coste de oportunidad por roturas: {coste_oportunidad:,.2f} EUR/mes",
-        f"Ahorro generado con PharmaSmart: {ahorro_acum:,.2f} EUR",
+        f"Ahorro generado con {APP_NAME}: {ahorro_acum:,.2f} EUR",
     ]
     for linea in resumen:
         pdf.cell(5, 7, "-")
@@ -70,5 +70,5 @@ def generar_informe_pdf(farmacia_nombre, hs, n_zombies, valor_zombie, n_uvi, val
     pdf.ln(10)
     pdf.set_font("Helvetica", "I", 8)
     pdf.set_text_color(100, 116, 139)
-    pdf.cell(0, 6, f"Generado por PharmaSmart v{VERSION} | {fecha}", align="C")
+    pdf.cell(0, 6, f"Generado por {APP_NAME} v{VERSION} | {fecha}", align="C")
     return bytes(pdf.output())

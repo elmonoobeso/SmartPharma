@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-from config.settings import COL_CN, COL_LAB, COL_NOMBRE, COL_PVL, COL_STOCK, HEALTH_SCORE_MESES_DEFAULT
+from config.settings import APP_NAME, COL_CN, COL_LAB, COL_NOMBRE, COL_PVL, COL_STOCK, HEALTH_SCORE_MESES_DEFAULT
 from core.business import calcular_benchmark_hs, calcular_coste_oportunidad, calcular_health_score, calcular_roi_laboratorios, calcular_rotacion_stock, calcular_roturas, calcular_sobrestock, calcular_stock_uvi, calcular_stock_zombie, cargar_productos_protegidos, generar_pedido_cobertura, obtener_historico_kpi, obtener_ventas_media, registrar_snapshot_kpi
 from data.io import cargar_json_farmacia
 from ml.engine import obtener_modelo_cacheado
@@ -219,7 +219,7 @@ def modulo_business_intelligence():
         farmacia_nombre, hs, len(df_z), dz, len(df_uvi), duvi,
         nr, coste_op, ahorro_acum_total, rotacion_media, benchmark)
     
-    informe_filename = "informe_pharmasmart.pdf"
+    informe_filename = f"informe_{APP_NAME.lower()}.pdf"
     
     # GUARDA FISICAMENTE COMO BACKUP 100% SEGURO
     with open(informe_filename, "wb") as f:

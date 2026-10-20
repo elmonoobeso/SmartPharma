@@ -1,4 +1,4 @@
-# PharmaSmart — dependencias verificadas sobre Python 3.14 (Windows)
+# SmartPharma — dependencias verificadas sobre Python 3.14 (Windows)
 # Instalacion:  py -3.14 -m pip install -r requirements.txt
 # Arranque:     py -3.14 -m streamlit run app.py
 

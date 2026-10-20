@@ -1,3 +1,21 @@
 __pycache__/
 *.pyc
-informe_pharmasmart.pdf
+
+# Informes generados por la app
+informe_*.pdf
+
+# Datos de farmacias: se crean al usar la app y nunca se versionan.
+# Solo se versionan las dos farmacias demo (datos sinteticos) y la config de la red.
+farmacias/*
+!farmacias/Farmacia_Demo_Centro/
+!farmacias/Farmacia_Demo_Barrio/
+!farmacias/red_config.json
+!farmacias/historico_compras_conjuntas.json
+
+# Modelos entrenados: se regeneran desde la app (y un .joblib ejecuta codigo al cargarse)
+*.joblib
+farmacias/**/modelo_*
+
+# Configuracion local del editor y de herramientas de IA
+*.code-workspace
+.claude/
