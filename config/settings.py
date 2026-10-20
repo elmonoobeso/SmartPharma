@@ -1,6 +1,6 @@
 from pathlib import Path
 
-APP_NAME = "PharmaSmart"
+APP_NAME = "SmartPharma"
 APP_ICON = "💊"
 VERSION = "4.3"
 

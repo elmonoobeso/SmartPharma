@@ -1,103 +1,143 @@
-# PharmaFlow / PharmaSmart
+# SmartPharma
 
-Aplicación de gestión de pedidos e inventario para farmacias, con un motor de
-predicción de demanda basado en Machine Learning. Desarrollada por
-**Miguel Ángel Leo Acedo** (Supply Chain Analyst con background en Farmacia).
+**Análisis de negocio, optimización de stock y predicción de demanda para farmacias.**
 
-> El repo se creó como `PharmaSmart`; algunos nombres internos (dependencias,
-> guía de ML) conservan aún ese nombre. Ver [Notas de nomenclatura](#notas-de-nomenclatura).
+Herramienta central de una consultoría de datos para farmacias, **en piloto con una farmacia
+real**. Se ejecuta en local, en el equipo del consultor: la farmacia solo entrega
+exportaciones de su ERP y recibe informes, pedidos sugeridos y recomendaciones. Sus datos no
+salen de ese equipo ni pasan por ningún servicio en la nube.
+
+*EN — Business analytics, inventory optimization and demand forecasting for pharmacies. The
+core tool of a pharmacy data consultancy, piloted in a real pharmacy. Runs locally on the
+consultant's machine; pharmacy data never leaves it.*
+
+Autor: **Miguel Ángel Leo Acedo** — Data & IA aplicada a farmacia, +5 años trabajando en
+farmacia.
+
+---
+
+## El problema
+
+Una farmacia tiene buena parte de su capital en stock, y las decisiones de compra se toman con
+prisa, de memoria o siguiendo la propuesta del delegado. El resultado se repite:
+
+- **Stock parado** que nadie ha vendido en un año.
+- **Roturas** de productos con demanda, es decir, ventas perdidas.
+- **Descuentos transfer mal aprovechados**: se pide de más por llegar a un tramo, o de menos
+  y se pierde el tramo.
+
+Los datos para evitarlo ya están en el ERP de la farmacia. SmartPharma los convierte en
+decisiones.
 
 ## Qué hace
 
-- **Predicción de demanda por producto** con un modelo XGBoost entrenado por
-  farmacia (ver [`ml/engine.py`](ml/engine.py)), combinando historial de
-  ventas, calendario, clima, grupo terapéutico (ATC) y promociones.
-- **Generación de pedidos** por cobertura o por presupuesto, con reglas de
-  surtido y tramos de descuento por proveedor.
-- **Torre de control / Business Intelligence**: KPIs, roturas de stock,
-  productos "zombie" (sin rotación), ROI de campañas.
-- **Auditoría de inventario** y generación de informes PDF.
-- Motor **heurístico** de respaldo cuando XGBoost/scikit-learn no están
-  disponibles, y un modo **ensemble** que combina ambos.
+| Módulo | Qué responde |
+|---|---|
+| **Business Intelligence** | ¿Cómo está mi stock? Health Score, stock zombie (sin ventas en 12 meses), sobrestock, roturas y su coste de oportunidad, ROI y rotación por laboratorio, informe PDF para el titular |
+| **Pedidos transfer** | ¿Qué pido y cuánto? Pedido por cobertura (meses) o por presupuesto, con tramos de descuento por oferta, productos protegidos, reglas de surtido y Excel por laboratorio |
+| **Predicción de demanda** | ¿Cuánto voy a vender? Modelo XGBoost por farmacia con calendario, clima, grupo terapéutico (ATC) y promociones, y stock de seguridad según el nivel de servicio |
+| **Auditoría** | ¿Cuadra lo que tengo? Conciliación físico frente a lógico, riesgo de caducidad, análisis ABC, flujo de caja del inventario y estacionalidad |
+| **Torre de control** | ¿Podemos comprar juntos? Detecta farmacias de una red que van a pedir al mismo laboratorio en la misma ventana y simula la compra conjunta para alcanzar un tramo mejor |
+| **Laboratorio ML** | ¿Me puedo fiar de la predicción? Explica paso a paso cómo se entrenó y validó el modelo de cada farmacia, y dónde falla |
 
-## Stack técnico
+## Motor de predicción: validado, no caja negra
 
-- **App:** [Streamlit](https://streamlit.io/)
-- **Datos:** pandas, NumPy, Parquet (vía pyarrow), Excel (openpyxl/XlsxWriter)
-- **ML:** XGBoost, scikit-learn, joblib
-- **Informes:** fpdf2
+- **Objetivo relativo**: el modelo predice ventas / media de 12 meses, así el mismo patrón sirve
+  a productos grandes y pequeños.
+- **Sin fugas de información**: split temporal, ajuste de hiperparámetros y selección
+  automática de grupos de variables solo con datos de entrenamiento, y backtest walk-forward
+  encadenado al horizonte real del pedido.
+- **Siempre contra un baseline honesto** (mismo mes del año anterior), para comprobar en cada
+  farmacia si el ML aporta de verdad.
+- **Productos nuevos** (cold start) mezclados con la media de su molécula, y **stock de
+  seguridad** estadístico (z × RMSE × √meses).
 
-Ver [`requirements.txt`](requirements.txt) para versiones exactas (verificadas
-sobre Python 3.14 en Windows).
+**Resultados.** Con datos sintéticos de patrón conocido, el modelo reduce entre un 39 % y un
+46 % el error a 3 meses frente al baseline (varía entre ejecuciones). En la farmacia demo gana a 1 mes (+11,6 %) y pierde a 3 meses
+(−8,3 %). Con historiales cortos el ML no siempre gana; por eso existe el modo **Ensemble**
+(ML + heurístico) y el **Laboratorio ML** enseña, farmacia por farmacia, si conviene usarlo.
+Detalle en [`docs/revision-codigo.md`](docs/revision-codigo.md) y conceptos en
+[`docs/guia-ml.md`](docs/guia-ml.md).
 
-## Cómo ejecutar
+## Privacidad
+
+- Todo se ejecuta en local. No hay servidor, base de datos externa ni llamadas a APIs con
+  datos de la farmacia.
+- Cada farmacia tiene su propia carpeta en `farmacias/`, excluida de git: **en este
+  repositorio solo hay datos sintéticos** de dos farmacias demo.
+- La herramienta la usa solo el consultor. Cuando trabaja con una red, los datos de cada
+  farmacia se guardan por separado y solo se cruzan para simular la compra conjunta.
+
+## Probar la demo
+
+Requiere Python 3.14.
 
 ```bash
 py -3.14 -m pip install -r requirements.txt
 py -3.14 -m streamlit run app.py
 ```
 
-Sin `xgboost`/`scikit-learn` instalados, la app sigue funcionando con el
-motor heurístico (`ML_AVAILABLE = False` en `ml/engine.py`).
+1. Elige `Farmacia_Demo_Centro` en el selector.
+2. Configuración → **H. Motor de Predicción ML** → entrena el modelo (no se versionan modelos
+   entrenados).
+3. Recorre las pestañas. La Torre de control usa las dos farmacias demo como red.
 
-## Estructura del proyecto
+Sin `xgboost`/`scikit-learn` la app funciona igual con el motor heurístico.
 
-```
-app.py                  Punto de entrada de la app Streamlit
-config/settings.py      Constantes y configuración global
-core/
-  business.py            Lógica de negocio: pedidos, KPIs, auditoría, benchmarks
-  network.py              Lógica de red de farmacias
-data/io.py               Carga y persistencia de datos por farmacia
-ml/engine.py             Motor de predicción de demanda (XGBoost)
-ui/
-  charts.py               Gráficos
-  components.py           Componentes de UI reutilizables
-  tabs/                    Una pestaña por módulo: pedidos, auditoría, BI,
-                           configuración, laboratorio ML, torre de control, selector
-utils/                   Helpers, red, generación de PDF
-farmacias/               Datos y modelos entrenados por farmacia (fixtures de prueba)
-tests/test_ml_engine.py  Tests del motor ML
-_legacy/                 Código archivado, no se ejecuta (ver LEEME.md)
-REVISION.md              Auditoría de bugs y hallazgos por módulo
-ml_guide_pharmasmart.md  Guía de conceptos de ML aplicados al proyecto
+## Tests
+
+```bash
+py -3.14 tests/test_ml_engine.py
 ```
 
-## Motor de Machine Learning
+7 pruebas con datos sintéticos que comprueban que el motor no ve el futuro: sin fugas en
+ninguna variable, no aprende de ruido ni de ventas barajadas, gana al baseline con un patrón
+conocido, capta la estacionalidad y predice todos los meses del pedido.
 
-Resumen en [`ml/engine.py`](ml/engine.py):
+## Stack
 
-- Un modelo `XGBRegressor` por farmacia, con objetivo relativo (ventas /
-  media de 12 meses) para que el mismo patrón sirva a productos grandes y
-  pequeños.
-- Split temporal con holdout de los últimos meses, ajuste de hiperparámetros
-  por validación temporal, selección automática de grupos de variables
-  (backward selection) y backtest walk-forward — nada se mide con datos que
-  el modelo pudo ver durante el entrenamiento.
-- Se compara siempre contra un baseline honesto (mismo mes del año anterior)
-  para verificar que el ML realmente aporta.
-- Maneja productos nuevos (cold start) mezclando la predicción con la media
-  de su molécula, y calcula stock de seguridad estadístico (Z-score × RMSE
-  por producto).
+Python · pandas · NumPy · XGBoost · scikit-learn · Streamlit · Plotly · Parquet (pyarrow) ·
+fpdf2 · Ruff
 
-Para una explicación paso a paso de cada concepto usado, ver
-[`ml_guide_pharmasmart.md`](ml_guide_pharmasmart.md).
+## Estructura
 
-## Estado del proyecto
+```
+app.py                Punto de entrada (Streamlit)
+config/settings.py    Constantes y configuración
+core/business.py      Lógica de negocio: KPIs, pedidos, auditoría, surtido
+core/network.py       Red de farmacias y compra conjunta
+data/io.py            Carga y persistencia por farmacia
+ml/engine.py          Motor de predicción (features, entrenamiento, validación, pedido ML)
+ui/tabs/              Una pestaña por módulo
+utils/                Helpers, informe PDF
+farmacias/            Datos por farmacia (solo las demo están versionadas)
+tests/                Banco de pruebas del motor ML
+docs/                 Guía de ML y auditoría de código
+```
 
-[`REVISION.md`](REVISION.md) documenta una auditoría en curso del código
-(bugs encontrados, severidad y arreglo propuesto por módulo). Antes de tocar
-`core/business.py` o `ui/tabs/configuracion.py`, revisa ahí — hay varios
-hallazgos ALTO/CRÍTICO aún sin corregir.
+## Hoja de ruta
 
-## `_legacy/`
+- Stock pendiente de recibir y encargos en el cálculo del pedido.
+- Múltiplos de caja e importe mínimo por laboratorio.
+- Integración con CIMA (AEMPS): clasificación oficial, ATC y alertas de problemas de
+  suministro.
+- Coste de oportunidad y ROI sobre margen (PVP − PVL).
+- Plan de liquidación del stock zombie: devolver, traspasar en la red, promocionar o provisionar.
+- Plantillas de importación por ERP (Farmatic, Nixfarma, Unycop) y control de calidad de datos.
+- Medición del impacto: foto inicial del cliente y panel antes/después.
 
-Contiene el monolito original (`app (5).py`, 3.777 líneas) y los scripts que
-lo dividieron en los módulos actuales. No se ejecuta — se conserva solo como
-referencia histórica. Ver [`_legacy/LEEME.md`](_legacy/LEEME.md).
+## Desarrollo asistido por IA
 
-## Notas de nomenclatura
+SmartPharma se ha desarrollado con asistencia de IA (Claude, Google Antigravity). El reparto:
 
-El proyecto nació como "PharmaSmart" y se está renombrando a "PharmaFlow".
-Quedan referencias al nombre antiguo en `ml_guide_pharmasmart.md`, el
-comentario de cabecera de `requirements.txt` y `pharmasmart.code-workspace`.
+- **Mío**: el problema y el conocimiento de farmacia, las reglas de negocio (tramos, surtido,
+  protegidos, zombie, coste de oportunidad), el diseño de los módulos, las decisiones de cada
+  lote de cambios y la validación de resultados.
+- **De la IA**: buena parte de la implementación, la auditoría de código y el banco de pruebas,
+  siempre revisados y aprobados por mí. El proceso completo, con cada hallazgo y decisión, está
+  en [`docs/revision-codigo.md`](docs/revision-codigo.md).
+
+## Licencia
+
+© 2026 Miguel Ángel Leo Acedo. **Todos los derechos reservados.** El código se publica solo
+para su consulta; no se concede licencia de uso, copia ni distribución. Ver [LICENSE](LICENSE).

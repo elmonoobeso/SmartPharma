@@ -3,13 +3,13 @@
     "fecha": "2026-03-08",
     "laboratorio": "Normon",
     "farmacias": [
-      "Farmacia_Test",
-      "Farmacia_Prueba_AI"
+      "Farmacia_Demo_Centro",
+      "Farmacia_Demo_Barrio"
     ],
     "ahorro_total": 85.47,
     "detalle": [
       {
-        "farmacia": "Farmacia_Test",
+        "farmacia": "Farmacia_Demo_Centro",
         "coste_individual": 1557.93,
         "coste_conjunto": 1501.04,
         "ahorro": 56.89,
@@ -17,7 +17,7 @@
         "proporcion": 66.6
       },
       {
-        "farmacia": "Farmacia_Prueba_AI",
+        "farmacia": "Farmacia_Demo_Barrio",
         "coste_individual": 782.66,
         "coste_conjunto": 754.08,
         "ahorro": 28.58,
@@ -30,13 +30,13 @@
     "fecha": "2026-03-09",
     "laboratorio": "Cinfa",
     "farmacias": [
-      "Farmacia_Test",
-      "Farmacia_Prueba_AI"
+      "Farmacia_Demo_Centro",
+      "Farmacia_Demo_Barrio"
     ],
     "ahorro_total": 66.71,
     "detalle": [
       {
-        "farmacia": "Farmacia_Test",
+        "farmacia": "Farmacia_Demo_Centro",
         "coste_individual": 1293.8,
         "coste_conjunto": 1259.57,
         "ahorro": 34.23,
@@ -44,7 +44,7 @@
         "proporcion": 51.3
       },
       {
-        "farmacia": "Farmacia_Prueba_AI",
+        "farmacia": "Farmacia_Demo_Barrio",
         "coste_individual": 1227.8,
         "coste_conjunto": 1195.31,
         "ahorro": 32.48,
