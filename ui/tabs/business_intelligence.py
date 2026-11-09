@@ -4,7 +4,7 @@ from config.settings import APP_NAME, COL_CN, COL_LAB, COL_NOMBRE, COL_PVL, COL_
 from core.business import calcular_benchmark_hs, calcular_coste_oportunidad, calcular_health_score, calcular_roi_laboratorios, calcular_rotacion_stock, calcular_roturas, calcular_sobrestock, calcular_stock_uvi, calcular_stock_zombie, cargar_productos_protegidos, generar_pedido_cobertura, obtener_historico_kpi, obtener_ventas_media, registrar_snapshot_kpi
 from data.io import cargar_json_farmacia
 from ml.engine import obtener_modelo_cacheado
-from ui.charts import grafico_calendario_reposicion, grafico_dinero_en_riesgo_donut, grafico_gauge_health, grafico_historico_kpi, grafico_importancia_features, grafico_roi_laboratorios, grafico_waterfall_ahorro
+from ui.charts import grafico_calendario_reposicion, grafico_dinero_en_riesgo_donut, grafico_gauge_health, grafico_historico_kpi, grafico_importancia_features, grafico_roi_laboratorios, grafico_waterfall_ahorro, laboratorios_sin_stock_roi
 from ui.components import render_kpi
 from utils.helpers import format_eur
 from utils.pdf_generator import generar_informe_pdf
@@ -141,11 +141,17 @@ def modulo_business_intelligence():
         fig_roi = grafico_roi_laboratorios(df_roi)
         if fig_roi:
             st.plotly_chart(fig_roi, width='stretch', config={"displayModeBar":False})
+        df_sin_stock = laboratorios_sin_stock_roi(df_roi)
+        if not df_sin_stock.empty:
+            lista = ", ".join(f"{r[COL_LAB]} ({format_eur(r['Venta_Anual_EUR'])}/a\u00f1o)" for _, r in df_sin_stock.iterrows())
+            st.caption(f"\u26a0\ufe0f Sin stock, con ventas (no entran en el ranking): {lista}")
         with st.expander("Ver tabla completa de ROI"):
             df_roi_show = df_roi.copy()
+            sin_stock = df_roi_show["Stock_EUR"] <= 0
             df_roi_show["Stock_EUR"] = df_roi_show["Stock_EUR"].apply(lambda x: f"{x:,.2f} \u20ac")
             df_roi_show["Venta_Anual_EUR"] = df_roi_show["Venta_Anual_EUR"].apply(lambda x: f"{x:,.2f} \u20ac")
             df_roi_show["ROI"] = df_roi_show["ROI"].apply(lambda x: f"{x:.2f}x")
+            df_roi_show.loc[sin_stock, "ROI"] = "Sin stock"
             st.dataframe(df_roi_show, width='stretch', hide_index=True)
 
     # === 7. Rotacion de Stock + Coste de Oportunidad ===

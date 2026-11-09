@@ -54,14 +54,14 @@ def grafico_calendario_reposicion(df_inv, df_ventas_media):
     lab_dias["Fecha_Reposicion"] = lab_dias["Dias_Stock"].apply(
         lambda d: (hoy + timedelta(days=max(0, d - 7))).strftime("%d/%m/%Y"))
     lab_dias["Dias_Stock"] = lab_dias["Dias_Stock"].round(0).astype(int)
-    # Colores por urgencia
+    lab_dias_sorted = lab_dias.sort_values("Dias_Stock", ascending=True)
+    # Colores por urgencia: un color distinto por tramo
     colores = []
-    for d in lab_dias["Dias_Stock"]:
+    for d in lab_dias_sorted["Dias_Stock"]:
         if d <= 14: colores.append(COLORS["danger"])
         elif d <= 30: colores.append(COLORS["warning"])
-        elif d <= 60: colores.append("#FFA726")
+        elif d <= 60: colores.append("#EAB308")
         else: colores.append(COLORS["success"])
-    lab_dias_sorted = lab_dias.sort_values("Dias_Stock", ascending=True)
     fig = go.Figure()
     fig.add_trace(go.Bar(
         x=lab_dias_sorted["Dias_Stock"],
@@ -81,7 +81,8 @@ def grafico_calendario_reposicion(df_inv, df_ventas_media):
         paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
         font={"family": "Inter"},
         xaxis=dict(title="Dias de stock restante", gridcolor="#E2E8F0"),
-        yaxis=dict(title=""),
+        # El mas urgente arriba (Plotly pinta la primera categoria abajo)
+        yaxis=dict(title="", autorange="reversed"),
     )
     return fig
 
@@ -138,12 +139,13 @@ def grafico_waterfall_ahorro(pedidos_confirmados):
     labs = [p.get("laboratorio", "?") for p in pedidos_confirmados]
     fechas = [p.get("fecha", "") for p in pedidos_confirmados]
     ahorros = [p.get("ahorro_ofertas", 0) for p in pedidos_confirmados]
-    labels = [f"{l}\n({f}) {i}" for i, (l, f) in enumerate(zip(labs, fechas))]
+    # Plotly no interpreta "\n": el salto de linea es <br>. El numero de pedido mantiene las etiquetas unicas.
+    labels = [f"#{i + 1} {l}<br>{f}" for i, (l, f) in enumerate(zip(labs, fechas))]
     acum = list(np.cumsum(ahorros))
     fig = go.Figure()
     fig.add_trace(go.Bar(
         x=labels, y=ahorros, name="Ahorro por Pedido",
-        marker_color=[COLORS["primary"] if a > 0 else COLORS["danger"] for a in ahorros],
+        marker_color=[COLORS["primary"] if a > 0 else (COLORS["muted"] if a == 0 else COLORS["danger"]) for a in ahorros],
         text=[f"{a:,.0f}€" for a in ahorros], textposition="outside",
         hovertemplate="<b>%{x}</b><br>Ahorro: %{y:,.2f}€<extra></extra>",
     ))
@@ -173,7 +175,8 @@ def grafico_dinero_en_riesgo_donut(valor_zombie, valor_sobrestock, coste_oportun
     total = sum(values)
     if total == 0:
         return None
-    colors_donut = [COLORS["warning"], "#FFA726", COLORS["danger"]]
+    # Mismos colores que el grafico de concentracion de riesgo; venta perdida en gris (es un flujo, no stock)
+    colors_donut = [COLORS["danger"], COLORS["primary"], COLORS["muted"]]
     fig = go.Figure(data=[go.Pie(
         labels=labels, values=values,
         hole=0.55, marker=dict(colors=colors_donut),
@@ -317,12 +320,22 @@ def grafico_estacionalidad_liquidez(df_stats):
     return fig
 
 
-def grafico_roi_laboratorios(df_roi, top_n=15):
-    """Barras horizontales de ROI por laboratorio, con colores verde/rojo."""
+def grafico_roi_laboratorios(df_roi, n_extremo=7):
+    """Barras horizontales de ROI por laboratorio: los `n_extremo` mejores y los `n_extremo` peores.
+
+    Los laboratorios sin stock no tienen ROI (no hay inversion): no entran en el ranking
+    ni en la media; se listan aparte con laboratorios_sin_stock_roi().
+    """
     if df_roi.empty:
         return None
-    df_top = df_roi.head(top_n).sort_values("ROI", ascending=True)
-    media_roi = df_roi["ROI"].mean()
+    df_con = df_roi[df_roi["Stock_EUR"] > 0].sort_values("ROI", ascending=False)
+    if df_con.empty:
+        return None
+    n_total = len(df_con)
+    recortado = n_total > 2 * n_extremo
+    df_sel = pd.concat([df_con.head(n_extremo), df_con.tail(n_extremo)]) if recortado else df_con
+    df_top = df_sel.sort_values("ROI", ascending=True)
+    media_roi = df_con["ROI"].mean()
     colores = [COLORS["success"] if r >= media_roi else COLORS["danger"] for r in df_top["ROI"]]
     fig = go.Figure()
     fig.add_trace(go.Bar(
@@ -335,14 +348,29 @@ def grafico_roi_laboratorios(df_roi, top_n=15):
     ))
     fig.add_vline(x=media_roi, line_dash="dash", line_color=COLORS["muted"],
         annotation_text=f"Media: {media_roi:.1f}x", annotation_position="top right")
+    titulo = "📊 ROI por Laboratorio (Venta Anual / Stock)"
+    if recortado:
+        # Separador entre los peores (abajo, posiciones 0..n-1) y los mejores (arriba)
+        fig.add_hline(y=n_extremo - 0.5, line_dash="dot", line_color=COLORS["muted"], line_width=1)
+        titulo += f"<br><sup>{n_extremo} mejores y {n_extremo} peores de {n_total} laboratorios con stock</sup>"
+    x_max = float(df_top["ROI"].max()) if len(df_top) else 0.0
     fig.update_layout(
-        title="📊 ROI por Laboratorio (Venta Anual / Stock)", height=max(300, top_n * 28),
+        title=titulo, height=max(300, len(df_top) * 28 + 100),
         paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
         font={"family": "Inter"},
-        xaxis=dict(title="ROI (veces)", gridcolor="#E2E8F0"),
+        # Margen a la derecha para que quepa el texto fuera de la barra mas larga
+        xaxis=dict(title="ROI (veces)", gridcolor="#E2E8F0", range=[0, max(1.0, x_max * 1.45)]),
         yaxis=dict(title=""),
     )
     return fig
+
+
+def laboratorios_sin_stock_roi(df_roi):
+    """Laboratorios con ventas pero sin stock (ROI no aplicable), de mayor a menor venta."""
+    if df_roi.empty:
+        return df_roi
+    return df_roi[(df_roi["Stock_EUR"] <= 0) & (df_roi["Venta_Anual_EUR"] > 0)].sort_values(
+        "Venta_Anual_EUR", ascending=False)
 
 
 # Cache
