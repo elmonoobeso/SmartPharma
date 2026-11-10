@@ -1,13 +1,14 @@
 import streamlit as st
 import pandas as pd
-from config.settings import APP_NAME, COL_CN, COL_LAB, COL_NOMBRE, COL_PVL, COL_STOCK, HEALTH_SCORE_MESES_DEFAULT
-from core.business import calcular_benchmark_hs, calcular_coste_oportunidad, calcular_health_score, calcular_roi_laboratorios, calcular_rotacion_stock, calcular_roturas, calcular_sobrestock, calcular_stock_uvi, calcular_stock_zombie, cargar_productos_protegidos, generar_pedido_cobertura, obtener_historico_kpi, obtener_ventas_media, registrar_snapshot_kpi
+from config.settings import COL_CN, COL_LAB, COL_NOMBRE, COL_PVL, COL_STOCK, HEALTH_SCORE_MESES_DEFAULT
+from core.business import fecha_corte, calcular_benchmark_hs, calcular_coste_oportunidad, calcular_health_score, calcular_roi_laboratorios, calcular_rotacion_stock, calcular_roturas, calcular_sobrestock, calcular_stock_uvi, calcular_stock_zombie, cargar_productos_protegidos, generar_pedido_cobertura, obtener_historico_kpi, obtener_ventas_media, registrar_snapshot_kpi
 from data.io import cargar_json_farmacia
 from ml.engine import obtener_modelo_cacheado
-from ui.charts import grafico_calendario_reposicion, grafico_dinero_en_riesgo_donut, grafico_gauge_health, grafico_historico_kpi, grafico_importancia_features, grafico_roi_laboratorios, grafico_waterfall_ahorro
+from ui.charts import grafico_calendario_reposicion, grafico_dinero_en_riesgo_donut, grafico_gauge_health, grafico_historico_kpi, grafico_importancia_features, grafico_roi_laboratorios, grafico_waterfall_ahorro, laboratorios_sin_stock_roi
 from ui.components import render_kpi
+from ui.tabs.analisis_ui import pie_lista, precios_venta, render_descuentos, render_ficha_laboratorio, render_sello_datos, render_ventas_margen
+from ui.tabs.informe_ui import render_informe
 from utils.helpers import format_eur
-from utils.pdf_generator import generar_informe_pdf
 
 
 def modulo_business_intelligence():
@@ -17,6 +18,7 @@ def modulo_business_intelligence():
     df_hist = st.session_state["historico"]
 
     st.markdown("### \U0001f4ca Business Intelligence")
+    render_sello_datos()
 
     # --- HS fijo a 2 meses ---
     meses_hs = HEALTH_SCORE_MESES_DEFAULT
@@ -35,7 +37,7 @@ def modulo_business_intelligence():
     # Nuevos calculos
     df_rotacion = calcular_rotacion_stock(df_inv, df_vm)
     rotacion_media = df_rotacion["Rotacion"].mean() if not df_rotacion.empty else 0
-    coste_op, df_coste_op = calcular_coste_oportunidad(df_inv, df_vm)
+    coste_op, df_coste_op = calcular_coste_oportunidad(df_inv, df_vm, precios_venta())   # a PVP si los datos lo traen
     df_uvi = calcular_stock_uvi(df_inv, df_hist)
     duvi = df_uvi["Valor_Inmovilizado"].sum() if not df_uvi.empty and "Valor_Inmovilizado" in df_uvi.columns else 0
     benchmark = calcular_benchmark_hs(hs)
@@ -55,6 +57,10 @@ def modulo_business_intelligence():
         registrar_snapshot_kpi(hs, len(df_z), dz, nr, ahorro, coste)
         st.success("\u2705 Guardado.")
 
+    # === 1b. Ventas en el tiempo y margen por laboratorio ===
+    render_ventas_margen()
+    st.markdown("---")
+
     # === 2. Gauge HS + Benchmark + Evolucion proyectada ===
     cg, ce = st.columns([1, 2])
     with cg:
@@ -71,22 +77,24 @@ def modulo_business_intelligence():
         else:
             st.caption("Ref: 2 meses | Benchmark: solo disponible con red activa")
     with ce:
-        fig_cal = grafico_calendario_reposicion(df_inv, df_vm)
+        fig_cal = grafico_calendario_reposicion(df_inv, df_vm, hoy=fecha_corte())
         if fig_cal:
             st.plotly_chart(fig_cal, width='stretch', config={"displayModeBar":False})
         else:
             st.info("Sin datos de ventas para calcular calendario de reposicion.")
 
     # === 3. Dinero en Riesgo + Productos con peor rotacion ===
-    st.markdown("---"); st.markdown("#### \U0001f4b0 Dinero en Riesgo")
+    st.markdown("---"); st.markdown("#### \U0001f4b0 Capital parado")
     c_dr, c_top = st.columns([3, 2])
     with c_dr:
         val_sob, _ = calcular_sobrestock(df_inv, df_vm, excluir_cns=df_z[COL_CN] if not df_z.empty else ())
-        fig_dr = grafico_dinero_en_riesgo_donut(dz, val_sob, coste_op)
+        fig_dr = grafico_dinero_en_riesgo_donut(dz, val_sob)
         if fig_dr:
             st.plotly_chart(fig_dr, width='stretch', config={"displayModeBar":False})
         else:
-            st.success("\u2705 Sin dinero en riesgo")
+            st.success("\u2705 Sin capital parado")
+        # La venta perdida es dinero que deja de entrar cada mes, no stock: se ensena aparte y no se suma al total.
+        st.caption(f"Aparte, las roturas cuestan **{format_eur(coste_op)}/mes** en ventas perdidas ({nr} productos). No se suma al capital parado.")
     with c_top:
         # Top productos con peor ratio rotacion (calculados con datos actuales)
         st.markdown("**\U0001f4c9 Productos con peor rotacion**")
@@ -111,9 +119,17 @@ def modulo_business_intelligence():
         ahorro_total = sum(p.get("ahorro_ofertas", 0) for p in pedidos_hist)
         coste_total = sum(p.get("coste_total", 0) for p in pedidos_hist)
         c1, c2, c3 = st.columns(3)
-        with c1: render_kpi("Ahorro Ofertas", format_eur(ahorro_total), "Dctos aplicados")
+        with c1: render_kpi("Ahorro Confirmado", format_eur(ahorro_total), "En pedidos confirmados")
         with c2: render_kpi("Inversion Total", format_eur(coste_total))
         with c3: render_kpi("Pedidos", str(len(pedidos_hist)))
+
+    # Ahorro del pedido sugerido hoy: se ensena, pero no cuenta como ahorro hasta que el pedido se confirma.
+    if ahorro > 0:
+        st.caption(f"💡 Ahorro posible con el pedido sugerido hoy: **{format_eur(ahorro)}** sobre {format_eur(coste)}. "
+                   "Es una estimación: no se suma al ahorro hasta que el pedido se confirma en Pedidos Transfer.")
+
+    # === 4b. Descuentos aprovechados y perdidos ===
+    render_descuentos()
 
     # === 5. Evolucion HS (mantener) ===
     st.markdown("---"); st.markdown("#### \U0001f4c8 Evolucion Historica")
@@ -136,17 +152,36 @@ def modulo_business_intelligence():
 
     # === 6. ROI por Laboratorio ===
     st.markdown("---"); st.markdown("#### \U0001f4ca ROI por Laboratorio")
-    df_roi = calcular_roi_laboratorios(df_inv, df_vm)
+    df_roi = calcular_roi_laboratorios(df_inv, df_vm, df_hist)
     if not df_roi.empty:
+        # Venta anual = lo vendido de verdad en 12 meses, no la prevision del mes que viene por 12
+        if df_roi.attrs.get("venta_real"):
+            meses_roi, hasta_roi = df_roi.attrs["meses_venta"], df_roi.attrs["hasta"]
+            if meses_roi >= 12:
+                st.caption(f"Venta anual = unidades vendidas en los 12 meses hasta {hasta_roi:%m/%Y}, a PVL.")
+            else:
+                st.caption(f"⚠️ Solo hay {meses_roi} meses de ventas: la venta anual se ha extrapolado a 12 meses, "
+                           "así que puede estar sesgada por la temporada.")
+        else:
+            st.caption("⚠️ El histórico no tiene fechas: la venta anual es la previsión mensual por 12.")
         fig_roi = grafico_roi_laboratorios(df_roi)
         if fig_roi:
             st.plotly_chart(fig_roi, width='stretch', config={"displayModeBar":False})
+        df_sin_stock = laboratorios_sin_stock_roi(df_roi)
+        if not df_sin_stock.empty:
+            lista = ", ".join(f"{r[COL_LAB]} ({format_eur(r['Venta_Anual_EUR'])}/a\u00f1o)" for _, r in df_sin_stock.iterrows())
+            st.caption(f"\u26a0\ufe0f Sin stock, con ventas (no entran en el ranking): {lista}")
         with st.expander("Ver tabla completa de ROI"):
             df_roi_show = df_roi.copy()
+            sin_stock = df_roi_show["Stock_EUR"] <= 0
             df_roi_show["Stock_EUR"] = df_roi_show["Stock_EUR"].apply(lambda x: f"{x:,.2f} \u20ac")
             df_roi_show["Venta_Anual_EUR"] = df_roi_show["Venta_Anual_EUR"].apply(lambda x: f"{x:,.2f} \u20ac")
             df_roi_show["ROI"] = df_roi_show["ROI"].apply(lambda x: f"{x:.2f}x")
+            df_roi_show.loc[sin_stock, "ROI"] = "Sin stock"
             st.dataframe(df_roi_show, width='stretch', hide_index=True)
+
+    # === 6b. Ficha de negociacion por laboratorio ===
+    render_ficha_laboratorio()
 
     # === 7. Rotacion de Stock + Coste de Oportunidad ===
     st.markdown("---"); st.markdown("#### \U0001f504 Rotacion de Stock")
@@ -166,10 +201,11 @@ def modulo_business_intelligence():
                 lambda x: f"{x:.1f}" if pd.notna(x) else "Sin ventas")
             n_sobre = len(df_rot_show[df_rot_show["Rotacion"] < 0.3])
             st.caption(f"Rotacion media: **{rotacion_media:.2f}** | \U0001f534 Sobrestock (<0.3): **{n_sobre}** prods")
-            with st.expander("Ver ranking completo"):
+            with st.expander("Ver ranking (peor rotacion primero)"):
                 cols_show = [c for c in [COL_CN, COL_NOMBRE, COL_LAB, COL_STOCK, "Venta_Media_Mensual",
                              "Rotacion", "Meses_Stock", "Estado"] if c in df_rot_show.columns]
                 st.dataframe(df_rot_show[cols_show].head(30), width='stretch', hide_index=True)
+                pie_lista(df_rot_show[cols_show], 30, "Rotacion de stock", "bi_rotacion")
         else:
             st.info("Sin datos de rotacion.")
     with c_co:
@@ -179,6 +215,7 @@ def modulo_business_intelligence():
             if not df_coste_op.empty:
                 with st.expander(f"Ver {len(df_coste_op)} productos en rotura"):
                     st.dataframe(df_coste_op.head(20), width='stretch', hide_index=True)
+                    pie_lista(df_coste_op, 20, "Roturas", "bi_roturas")
         else:
             st.success("\u2705 Sin roturas — no hay venta perdida")
 
@@ -190,6 +227,7 @@ def modulo_business_intelligence():
         if not df_z.empty:
             cs = [c for c in [COL_CN,COL_NOMBRE,COL_LAB,COL_STOCK,COL_PVL,"Valor_Inmovilizado"] if c in df_z.columns]
             st.dataframe(df_z[cs].sort_values("Valor_Inmovilizado",ascending=False).head(20), width='stretch', hide_index=True)
+            pie_lista(df_z[cs].sort_values("Valor_Inmovilizado", ascending=False), 20, "Zombie", "bi_zombie")
         else:
             st.success("\u2705 Sin stock zombie")
     with c_u:
@@ -197,6 +235,7 @@ def modulo_business_intelligence():
         if not df_uvi.empty:
             cs = [c for c in [COL_CN,COL_NOMBRE,COL_LAB,COL_STOCK,COL_PVL,"Valor_Inmovilizado"] if c in df_uvi.columns]
             st.dataframe(df_uvi[cs].sort_values("Valor_Inmovilizado",ascending=False).head(20), width='stretch', hide_index=True)
+            pie_lista(df_uvi[cs].sort_values("Valor_Inmovilizado", ascending=False), 20, "UVI", "bi_uvi")
         else:
             st.success("\u2705 Sin stock UVI")
 
@@ -211,31 +250,5 @@ def modulo_business_intelligence():
         fig_imp = grafico_importancia_features(met)
         if fig_imp: st.plotly_chart(fig_imp, width='stretch', config={"displayModeBar":False})
 
-    # === 10. Descargar Informe ===
-    st.markdown("---")
-    farmacia_nombre = st.session_state.get("farmacia_activa", "Farmacia").replace("_", " ").title()
-    ahorro_acum_total = df_hk["ahorro_pedido"].sum() if not df_hk.empty else 0
-    informe_bytes = generar_informe_pdf(
-        farmacia_nombre, hs, len(df_z), dz, len(df_uvi), duvi,
-        nr, coste_op, ahorro_acum_total, rotacion_media, benchmark)
-    
-    informe_filename = f"informe_{APP_NAME.lower()}.pdf"
-    
-    # GUARDA FISICAMENTE COMO BACKUP 100% SEGURO
-    with open(informe_filename, "wb") as f:
-        f.write(informe_bytes)
-        
-    st.success(f"✅ Informe guardado físicamente en la carpeta como **{informe_filename}**.")
-    st.info("💡 Si el botón de abajo te descarga un archivo sin extensión, simplemente renómbralo a '.pdf' o abre directamente el archivo guardado en tu carpeta.")
-    
-    # INTENTO DE DESCARGA NATIVA
-    with open(informe_filename, "rb") as f:
-        pdf_data = f.read()
-        
-    st.download_button(
-        label="📄 Intentar Descargar Informe (PDF)",
-        data=pdf_data, 
-        file_name=informe_filename,
-        mime="application/pdf", 
-        width="stretch"
-    )
+    # === 10. Informe PDF para el cliente (se genera solo al pulsar el boton) ===
+    render_informe()

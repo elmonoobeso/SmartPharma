@@ -6,6 +6,8 @@ from data.io import guardar_dataframe_farmacia, ruta_farmacia_activa
 from ml.engine import ML_AVAILABLE, build_features, entrenar_modelo_ml, guardar_modelo_farmacia, invalidar_cache_modelo, necesita_reentrenamiento, obtener_modelo_cacheado
 from ui.charts import grafico_importancia_features
 from ui.components import render_kpi
+from core.analisis import normalizar_opcionales
+from ui.tabs.analisis_ui import render_columnas_opcionales, render_compras, render_fecha_inventario, render_parametros_analisis
 from utils.helpers import validar_y_renombrar_columnas
 from utils.network import ejecutar_benchmark_red
 
@@ -39,9 +41,11 @@ def modulo_configuracion():
             try:
                 df_inv = pd.read_csv(file_inv) if file_inv.name.endswith(".csv") else pd.read_excel(file_inv)
                 df_inv, inf = validar_y_renombrar_columnas(df_inv, [COL_CN, COL_STOCK, COL_PVL, COL_LAB, COL_NOMBRE, COL_MOLECULA])
+                df_inv, opc_inv = normalizar_opcionales(df_inv, "inventario")
                 st.session_state["inventario"] = df_inv
                 guardar_dataframe_farmacia("inventario.parquet", df_inv)
                 for col, found in inf.items(): st.markdown(f"\u2705 `{col}`" if found else f"\u274c `{col}` no encontrada")
+                render_columnas_opcionales(opc_inv)
                 st.info(f"{len(df_inv)} productos cargados")
                 # Snapshot de auditoria automatico
                 df_vm_snap = obtener_ventas_media(meses_cobertura=2) if "historico" in st.session_state else pd.DataFrame()
@@ -50,9 +54,10 @@ def modulo_configuracion():
                     st.caption(f"\U0001f4f8 Snapshot guardado: {snap['n_zombies']} zombies, {snap['n_roturas']} roturas")
                 _marcar_procesado(file_inv, "_proc_up_inv")
             except Exception as e: st.error(f"Error: {e}")
+        render_fecha_inventario()
     with c2:
         st.markdown('<div class="upload-zone">', unsafe_allow_html=True)
-        file_v = st.file_uploader("\U0001f4c8 HISTORICO VENTAS (36 meses)", type=["xlsx","xls","csv"], key="up_ven")
+        file_v =st.file_uploader("\U0001f4c8 HISTORICO VENTAS (36 meses)", type=["xlsx","xls","csv"], key="up_ven")
         st.markdown('</div>', unsafe_allow_html=True)
         if file_v and _archivo_ya_procesado(file_v, "_proc_up_ven"):
             st.caption(f"\u2705 {file_v.name} ya cargado ({len(st.session_state.get('historico', []))} registros)")
@@ -60,10 +65,12 @@ def modulo_configuracion():
             try:
                 df_v = pd.read_csv(file_v) if file_v.name.endswith(".csv") else pd.read_excel(file_v)
                 df_v, inf = validar_y_renombrar_columnas(df_v, [COL_CN, COL_VENTAS, COL_FECHA])
+                df_v, opc_v = normalizar_opcionales(df_v, "historico")
                 st.session_state["historico"] = df_v
                 guardar_dataframe_farmacia("historico.parquet", df_v)
                 st.session_state.pop("ventas_media_cache", None); st.session_state.pop("historico_hash", None)
                 for col, found in inf.items(): st.markdown(f"\u2705 `{col}`" if found else f"\u274c `{col}` no encontrada")
+                render_columnas_opcionales(opc_v)
                 if COL_FECHA in df_v.columns:
                     df_v[COL_FECHA] = pd.to_datetime(df_v[COL_FECHA], errors="coerce", dayfirst=True)
                     anios = df_v[COL_FECHA].dropna().dt.year.nunique()
@@ -346,6 +353,10 @@ def modulo_configuracion():
             with c_bench[i]:
                 lat = f"{r['latencia_ms']} ms" if r['latencia_ms'] is not None else "Timeout/Error"
                 render_kpi(r['url'].replace("https://", ""), lat, "OK" if r['estado'] == "OK" else r['estado'], r['estado'] == "OK")
+
+    # --- J y K. Parametros de analisis y compras (BI y Auditoria) ---
+    render_parametros_analisis()
+    render_compras()
 
     # --- Estado ---
     st.divider()

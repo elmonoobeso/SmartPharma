@@ -304,7 +304,19 @@ def crecimiento_12m(ventas_por_mes, col_periodo="_periodo"):
     crec.columns.name = COL_CN
     return crec.stack(future_stack=True).reset_index(name="Crecimiento_12m")
 
-def calcular_ventas_mensuales(df_ventas, meses_cobertura=2):
+def fecha_corte():
+    """Fecha del inventario confirmada en Configuracion (dia del export del ERP), o None si no se ha indicado.
+
+    Es la referencia de todo lo que mira hacia delante (meses que se preven, caducidades,
+    calendario de reposicion). Antes se usaba la fecha de hoy: con los mismos datos las
+    cifras cambiaban de un dia a otro. Lo que mira hacia atras (zombie, UVI, tendencia)
+    sigue anclado al ultimo dia con ventas del historico.
+    """
+    f = cargar_json_farmacia("parametros_analisis.json", default={}).get("fecha_inventario")
+    return pd.Timestamp(f) if f else None
+
+def calcular_ventas_mensuales(df_ventas, meses_cobertura=2, fecha_ref=None):
+    """`fecha_ref`: dia desde el que se cuentan los meses a prever (por defecto, hoy)."""
     df = df_ventas.copy()
     if COL_FECHA not in df.columns:
         agg = df.groupby(COL_CN)[COL_VENTAS].agg(["sum", "std"]).reset_index()
@@ -328,7 +340,7 @@ def calcular_ventas_mensuales(df_ventas, meses_cobertura=2):
     factor_tendencia = (crec[crec["_periodo"] == p_max + 1][[COL_CN, "Crecimiento_12m"]]
                         .rename(columns={"Crecimiento_12m": "Factor_Tendencia"}))
 
-    hoy = datetime.now()
+    hoy = pd.Timestamp(fecha_ref) if fecha_ref is not None else datetime.now()
     meses_futuro = [(hoy + relativedelta(months=m)).month for m in range(1, meses_cobertura+1)]
     # Mirroring: el mismo mes en los ultimos 12 meses de historico (cada mes aparece una vez).
     recientes = ventas_por_mes[ventas_por_mes["_periodo"] > p_max - 12]
@@ -349,9 +361,10 @@ def obtener_ventas_media(meses_cobertura=2):
     df_hist = st.session_state.get("historico")
     if df_hist is None:
         return pd.DataFrame()
-    current_hash = hash((pd.util.hash_pandas_object(df_hist).sum(), meses_cobertura))
+    ref = fecha_corte()
+    current_hash = hash((pd.util.hash_pandas_object(df_hist).sum(), meses_cobertura, str(ref)))
     if "ventas_media_cache" not in st.session_state or st.session_state.get("historico_hash") != current_hash:
-        st.session_state["ventas_media_cache"] = calcular_ventas_mensuales(df_hist, meses_cobertura)
+        st.session_state["ventas_media_cache"] = calcular_ventas_mensuales(df_hist, meses_cobertura, fecha_ref=ref)
         st.session_state["historico_hash"] = current_hash
     return st.session_state["ventas_media_cache"]
 
@@ -385,8 +398,24 @@ def calcular_stock_zombie(df_inventario, df_ventas, meses_sin_venta=12):
         vt = df_ventas.groupby(COL_CN)[COL_VENTAS].sum().reset_index()
         cn_con_ventas = set(vt[vt[COL_VENTAS] > 0][COL_CN])
     df_z = df_inv[(df_inv[COL_STOCK] > 0) & (~df_inv[COL_CN].isin(cn_con_ventas))].copy()
+    # Un producto recien dado de alta tampoco tiene ventas, pero no es stock muerto.
+    nuevos = cns_alta_reciente(df_inventario, df_ventas, meses_sin_venta)
+    if nuevos:
+        df_z = df_z[~df_z[COL_CN].isin(nuevos)].copy()
     df_z["Valor_Inmovilizado"] = (df_z[COL_STOCK] * df_z.get(COL_PVL, pd.Series(0))).fillna(0)
     return df_z
+
+def cns_alta_reciente(df_inventario, df_ventas, meses=12):
+    """Productos del inventario sin ninguna venta en todo el historico que entraron en la farmacia
+    hace menos de `meses`. El ERP no da fecha de alta, asi que la entrada se deduce de las fotos de
+    stock (primera foto en la que aparece, si hay fotos anteriores sin el) y de las compras registradas.
+    Con una sola foto y sin compras no se puede saber: devuelve un conjunto vacio."""
+    vendidos = set(df_ventas[df_ventas[COL_VENTAS] > 0][COL_CN]) if COL_VENTAS in df_ventas.columns else set()
+    nunca_vendidos = set(df_inventario[COL_CN]) - vendidos
+    if not nunca_vendidos:
+        return set()
+    from data.historicos import entradas_recientes  # import diferido: data.historicos importa de este modulo
+    return nunca_vendidos & entradas_recientes(meses)
 
 def calcular_sobrestock(df_inventario, df_ventas_media, excluir_cns=(), meses_objetivo=HEALTH_SCORE_MESES_DEFAULT):
     """Exceso de stock sobre `meses_objetivo` de venta, en unidades y euros.
@@ -463,14 +492,42 @@ def calcular_rotacion_stock(df_inventario, df_ventas_media):
 
 
 # --- ROI por laboratorio ---
-def calcular_roi_laboratorios(df_inventario, df_ventas_media):
-    """ROI = Venta_Anual_€ / Stock_€ por laboratorio."""
+def ventas_ultimos_12_meses(df_ventas):
+    """(unidades vendidas por producto en los 12 ultimos meses con datos, meses que cubren, ultimo dia con ventas).
+
+    Devuelve (None, 0, None) si el historico no tiene fechas. Si hay menos de 12 meses de
+    historico, `meses` lo dice para que quien llame pueda anualizar y avisar.
+    """
+    if df_ventas is None or df_ventas.empty or COL_FECHA not in df_ventas.columns:
+        return None, 0, None
+    fechas = pd.to_datetime(df_ventas[COL_FECHA], errors="coerce", dayfirst=True)
+    periodo = fechas.dt.year * 12 + fechas.dt.month
+    if periodo.notna().sum() == 0:
+        return None, 0, None
+    p_max = periodo.max()
+    meses = int(min(12, p_max - periodo.min() + 1))
+    uds = df_ventas[periodo > p_max - 12].groupby(COL_CN)[COL_VENTAS].sum()
+    return uds, meses, fechas.max()
+
+def calcular_roi_laboratorios(df_inventario, df_ventas_media, df_ventas=None):
+    """ROI = Venta_Anual_€ / Stock_€ por laboratorio.
+
+    Venta anual = lo vendido de verdad en los ultimos 12 meses del historico (`df_ventas`), a PVL.
+    Antes se multiplicaba por 12 la prevision de los dos meses siguientes, que es estacional: en
+    junio los laboratorios de verano parecian los mejores y en noviembre los peores.
+    Con menos de 12 meses de historico se anualiza lo que hay (attrs["meses_venta"] lo indica).
+    Sin historico con fechas se mantiene el calculo antiguo (attrs["venta_real"] = False).
+    """
     if COL_LAB not in df_inventario.columns or COL_PVL not in df_inventario.columns:
         return pd.DataFrame()
     df = df_inventario.merge(df_ventas_media[[COL_CN, "Venta_Media_Mensual"]], on=COL_CN, how="left")
     df["Venta_Media_Mensual"] = df["Venta_Media_Mensual"].fillna(0)
     df["Stock_EUR"] = (df[COL_STOCK] * df[COL_PVL]).fillna(0)
-    df["Venta_Anual_EUR"] = (df["Venta_Media_Mensual"] * 12 * df[COL_PVL]).fillna(0)
+    uds_12m, meses, hasta = ventas_ultimos_12_meses(df_ventas)
+    if uds_12m is not None:
+        df["Venta_Anual_EUR"] = (df[COL_CN].map(uds_12m).fillna(0) * (12 / meses) * df[COL_PVL]).fillna(0)
+    else:
+        df["Venta_Anual_EUR"] = (df["Venta_Media_Mensual"] * 12 * df[COL_PVL]).fillna(0)
     lab_agg = df.groupby(COL_LAB).agg(
         Stock_EUR=("Stock_EUR", "sum"),
         Venta_Anual_EUR=("Venta_Anual_EUR", "sum"),
@@ -479,23 +536,30 @@ def calcular_roi_laboratorios(df_inventario, df_ventas_media):
     lab_agg["ROI"] = np.where(lab_agg["Stock_EUR"] > 0,
         (lab_agg["Venta_Anual_EUR"] / lab_agg["Stock_EUR"]).round(2), 0.0)
     lab_agg = lab_agg.sort_values("ROI", ascending=False)
+    lab_agg.attrs.update({"venta_real": uds_12m is not None, "meses_venta": meses, "hasta": hasta})
     return lab_agg
 
 
 # --- Coste de oportunidad de roturas ---
-def calcular_coste_oportunidad(df_inventario, df_ventas_media):
-    """Euros perdidos al mes por no tener stock de productos con demanda."""
+def calcular_coste_oportunidad(df_inventario, df_ventas_media, precios_venta=None):
+    """Venta que se pierde al mes por no tener stock de productos con demanda.
+
+    `precios_venta`: Serie {codigo nacional: PVP sin IVA}. Con ella la venta perdida se valora a
+    precio de venta, que es lo que deja de entrar en caja; los productos sin PVP, y todos si no
+    se pasa la serie, se valoran a PVL.
+    """
     df_rot = calcular_roturas(df_inventario, df_ventas_media)
     if df_rot.empty:
         return 0.0, pd.DataFrame()
     df_rot = df_rot.copy()
-    if COL_PVL in df_rot.columns:
-        df_rot["Venta_Perdida_Mes"] = (df_rot["Venta_Media_Mensual"] * df_rot[COL_PVL]).fillna(0).round(2)
-    else:
-        df_rot["Venta_Perdida_Mes"] = 0.0
+    precio = df_rot[COL_PVL] if COL_PVL in df_rot.columns else pd.Series(0.0, index=df_rot.index)
+    if precios_venta is not None:
+        df_rot["PVP_Sin_IVA"] = df_rot[COL_CN].map(precios_venta)
+        precio = df_rot["PVP_Sin_IVA"].where(df_rot["PVP_Sin_IVA"].notna(), precio)
+    df_rot["Venta_Perdida_Mes"] = (df_rot["Venta_Media_Mensual"] * precio).fillna(0).round(2)
     total = df_rot["Venta_Perdida_Mes"].sum()
     cols = [c for c in [COL_CN, COL_NOMBRE, COL_LAB, "Venta_Media_Mensual",
-            COL_PVL, "Venta_Perdida_Mes"] if c in df_rot.columns]
+            COL_PVL, "PVP_Sin_IVA", "Venta_Perdida_Mes"] if c in df_rot.columns]
     return round(total, 2), df_rot[cols].sort_values("Venta_Perdida_Mes", ascending=False)
 
 
@@ -550,38 +614,37 @@ def calcular_indice_servicio(df_inventario, df_ventas):
     fill_rate = len(cn_con_stock) / len(cn_demanda) * 100
     return fill_rate, len(cn_demanda), len(cn_demanda) - len(cn_con_stock)
 
-def calcular_analisis_abc(df_inventario, df_ventas_media):
-    """Clasifica los productos en A (80% valor stock), B (15%), C (5%)."""
-    if COL_PVL not in df_inventario.columns or df_inventario.empty: return pd.DataFrame()
-    df = df_inventario.merge(df_ventas_media[[COL_CN, "Venta_Media_Mensual"]], on=COL_CN, how="left")
-    df["Venta_Media_Mensual"] = df["Venta_Media_Mensual"].fillna(0)
-    df["Valor_Stock"] = (df[COL_STOCK] * df[COL_PVL]).fillna(0)
-    
-    df = df.sort_values(by="Valor_Stock", ascending=False).reset_index(drop=True)
-    total_valor = df["Valor_Stock"].sum()
-    if total_valor == 0: return df
-    
-    df["Pct_Valor_Acumulado"] = (df["Valor_Stock"].cumsum() / total_valor) * 100
-    df["Clasificacion_ABC"] = np.where(df["Pct_Valor_Acumulado"] <= 80, "A (80%)",
-                                np.where(df["Pct_Valor_Acumulado"] <= 95, "B (15%)", "C (5%)"))
+def _stock_con_caducidad(df_inventario):
+    """Productos con stock y fecha de caducidad valida, o None si el inventario no trae fechas."""
+    if df_inventario.empty or "Fecha_Caducidad" not in df_inventario.columns:
+        return None
+    df = df_inventario.copy()
+    df["Fecha_Caducidad"] = pd.to_datetime(df["Fecha_Caducidad"], errors="coerce", dayfirst=True)
+    if df["Fecha_Caducidad"].notna().sum() == 0:
+        return None
+    df = df[df["Fecha_Caducidad"].notna() & (df[COL_STOCK] > 0)].copy()
+    pvl = df[COL_PVL] if COL_PVL in df.columns else pd.Series(0.0, index=df.index)
+    df["Valor_Caducidad"] = (df[COL_STOCK] * pvl).fillna(0)
     return df
 
 def calcular_riesgo_caducidad(df_inventario):
-    """Valor en riesgo por caducidad en < 6 meses. Solo con fechas de caducidad reales:
-    sin ellas devuelve (None, 0, False) y no se muestra ni se usa ninguna estimacion."""
-    df = df_inventario.copy()
-    if df.empty: return None, 0, False
-    
-    if "Fecha_Caducidad" not in df.columns:
-        return None, 0, False
-    df["Fecha_Caducidad"] = pd.to_datetime(df["Fecha_Caducidad"], errors="coerce", dayfirst=True)
-    if df["Fecha_Caducidad"].notna().sum() == 0:
-        return None, 0, False
-    limite = datetime.now() + relativedelta(months=6)
-    df_cad = df[df["Fecha_Caducidad"] <= limite]
-    pvl = df_cad[COL_PVL] if COL_PVL in df_cad.columns else pd.Series(0.0, index=df_cad.index)
-    valor = float((df_cad[COL_STOCK] * pvl).fillna(0).sum())
-    return valor, len(df_cad), True
+    """(valor, n productos, hay_datos) del stock que caduca en los 6 meses siguientes a la fecha del inventario.
+
+    Solo productos con stock y aun no caducados (lo ya caducado va en calcular_stock_caducado).
+    Sin fechas de caducidad reales devuelve (None, 0, False): no se estima nada."""
+    df = _stock_con_caducidad(df_inventario)
+    if df is None: return None, 0, False
+    ref = fecha_corte() or pd.Timestamp(datetime.now())
+    df_cad = df[(df["Fecha_Caducidad"] > ref) & (df["Fecha_Caducidad"] <= ref + relativedelta(months=6))]
+    return float(df_cad["Valor_Caducidad"].sum()), len(df_cad), True
+
+def calcular_stock_caducado(df_inventario):
+    """(valor, n productos) del stock cuya fecha de caducidad ya ha pasado a la fecha del inventario."""
+    df = _stock_con_caducidad(df_inventario)
+    if df is None: return 0.0, 0
+    ref = fecha_corte() or pd.Timestamp(datetime.now())
+    df_cad = df[df["Fecha_Caducidad"] <= ref]
+    return float(df_cad["Valor_Caducidad"].sum()), len(df_cad)
 
 def calcular_matriz_rentabilidad_gmroi(df_inventario, df_ventas_media):
     """Calcula GMROI proxy (Margen * Rotación) si existe PVP y PVL."""
@@ -635,12 +698,19 @@ def calcular_dependencia_estacional(df_ventas):
         7:"Jul", 8:"Ago", 9:"Sep", 10:"Oct", 11:"Nov", 12:"Dic"})
     return promedio_mensual.sort_values("Mes")
 
-def calcular_conciliacion_fisico_logico(df_teorico, df_fisico):
-    """Cruza Stock_Teorico con Cantidad_Fisica del CSV con la pistola."""
+def calcular_conciliacion_fisico_logico(df_teorico, df_fisico, conteo_completo=False):
+    """Cruza Stock_Teorico con Cantidad_Fisica del CSV con la pistola. Devuelve (descuadres, alcance).
+
+    Por defecto solo se comparan los productos que aparecen en el archivo del conteo: lo normal es
+    contar una parte de la farmacia, y dar por desaparecido todo lo que no se ha contado inventaba
+    perdidas. Con `conteo_completo=True` (se ha contado toda la farmacia) lo que no aparece en el
+    archivo si cuenta como faltante. `alcance` dice cuanto se ha contado; (None, {}) si no se
+    reconocen las columnas del archivo.
+    """
     col_cn = [c for c in df_fisico.columns if "cod" in c.lower() or "cn" in c.lower()]
     col_cant = [c for c in df_fisico.columns if "cant" in c.lower() or "stock" in c.lower()]
-    if not col_cn or not col_cant: return None
-    
+    if not col_cn or not col_cant: return None, {}
+
     c_cn, c_qt = col_cn[0], col_cant[0]
     agg_fisico = df_fisico.groupby(c_cn)[c_qt].sum().reset_index()
     agg_fisico.columns = [COL_CN, "Stock_Fisico"]
@@ -649,13 +719,24 @@ def calcular_conciliacion_fisico_logico(df_teorico, df_fisico):
     
     df = df_teorico.copy()
     if COL_PVL not in df.columns: df[COL_PVL] = 0
-    df = df.merge(agg_fisico, on=COL_CN, how="outer")
+    df = df.merge(agg_fisico, on=COL_CN, how="outer", indicator="_origen")
     df[COL_STOCK] = df[COL_STOCK].fillna(0)
     df["Stock_Fisico"] = df["Stock_Fisico"].fillna(0)
-    
+    en_inventario, contado = df["_origen"] != "right_only", df["_origen"] != "left_only"
+    valor = (df[COL_STOCK] * df[COL_PVL]).fillna(0)
+    alcance = {
+        "en_inventario": int(en_inventario.sum()), "contados": int((en_inventario & contado).sum()),
+        "no_contados": int((~contado).sum()), "fuera_de_inventario": int((~en_inventario).sum()),
+        "valor_inventario": float(valor[en_inventario].sum()), "valor_contado": float(valor[en_inventario & contado].sum()),
+        "valor_no_contado": float(valor[~contado].sum()), "conteo_completo": bool(conteo_completo),
+    }
+    if not conteo_completo:
+        df = df[contado]
+    df = df.drop(columns=["_origen"]).copy()
+
     df["Descuadre_Uds"] = df["Stock_Fisico"] - df[COL_STOCK]
     df["Descuadre_Eur"] = df["Descuadre_Uds"] * df[COL_PVL]
-    return df
+    return df, alcance
 
 def calcular_flujo_caja_inventario(df_inv, df_vm, dias_pago_media, df_facturas=None):
     """Cruza la rotacion del inventario con los dias de pago para ver el Flujo de Caja."""
