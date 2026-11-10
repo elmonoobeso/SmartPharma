@@ -125,3 +125,77 @@ ESTADO: Fase 1 terminada. Esperando aprobacion para empezar lote 1 en rama revis
 - Bajo: crear_farmacia sin sanear, stock negativo, KeyErrors defensivos, B905.
 - Torre de control: no tocar (decision usuario). Ofertas por laboratorio: sin respuesta.
 Torre de control: no tocar. Ofertas por laboratorio: sin respuesta, no se cambia.
+
+## Fase 3: mejoras de BI y Auditoria (2026-11-10, rama fix/bi-graficos, sin commit)
+Origen: revision de BI y Auditoria + panel de 20 clientes simulados. Decision del usuario: implementar las 10 mejoras
+mas valoradas y NO corregir todavia ninguno de los 10 errores detectados (quiere entenderlos antes). Por eso todo lo nuevo
+va en archivos y secciones aparte y las pantallas existentes calculan exactamente igual que antes.
+
+Reglas de negocio dadas por el usuario:
+- Devolucion al proveedor: refrigerados 48 h desde la recepcion, resto 10 dias. Personalizable por farmacia.
+- Stock optimo personalizable por farmacia; por defecto 2 meses en medicamento, con una lista propia de productos no caducables.
+- El ERP trae PVL (dejar opcion de descuento de compra), fecha de caducidad por producto y, en el historico de ventas, PVP.
+- La fecha del inventario se teclea al subirlo y queda guardada. Cargas cada 2-4 semanas.
+- Compras/pedidos transfer por Excel y ofertas con tramos: opcionales, la herramienta funciona sin ellas.
+
+Archivos nuevos:
+- core/analisis.py (funciones puras): base por producto, plan de accion, capital liberable, caducidades, ventas interanuales,
+  margen y resumen por laboratorio, compras, descuentos conseguidos/perdidos, roturas recurrentes, calidad de datos, listas de trabajo.
+- data/historicos.py: parametros_analisis.json, fotos_stock.parquet (una foto por fecha de inventario) y compras.parquet por farmacia.
+- utils/excel_export.py, ui/charts_analisis.py, ui/tabs/analisis_ui.py, tests/test_analisis.py.
+Cambios en archivos existentes (solo llamadas a las secciones nuevas): configuracion.py (fecha del inventario bajo el cargador,
+secciones J y K), business_intelligence.py (sello de datos, ventas y margen, descuentos, ficha de laboratorio) y auditoria.py
+(sello de datos y pestanas Plan de Accion, Caducidades y Roturas Recurrentes).
+
+Decisiones de diseno:
+- Capital parado y venta perdida nunca se suman: son dos bloques del plan con su propia prioridad.
+- Stock objetivo en unidades enteras (redondeo hacia arriba): el exceso sale unos euros menor que el "sobrestock" de la pantalla antigua.
+- "Devolver" solo se propone si se conoce la fecha de recepcion (compras subidas o pedidos confirmados) y esta dentro del plazo.
+- Rotura recurrente: stock 0 en fotos de inventario (prueba directa) o periodos sin venta en productos que venden >= 3 uds por periodo;
+  periodo = 14 dias con historico diario/semanal, mes con historico mensual. Los productos lentos no cuentan.
+- El Excel se genera al pulsar el boton (con 8.000 referencias tarda ~7 s), no en cada carga de la pantalla.
+- Las pantallas antiguas no usan los parametros nuevos (Health Score, zombie, roturas y ROI no cambian).
+
+Verificado: tests/test_analisis.py 11/11 y tests/test_ml_engine.py 7/7; AppTest de app.py en copia con las dos farmacias demo sin
+excepciones; flujo guardar fecha -> corregir fecha -> guardar parametros -> inventario nuevo con PVP/caducidad/ubicacion sin excepciones;
+graficos renderizados y revisados a la vista; 8.000 referencias x 36 meses: analisis ~3 s una vez por carga de datos.
+No verificado: subida real de un Excel de compras por el navegador (probada la funcion, no el cargador), ruff (no instalado en este
+equipo) y datos reales de un ERP.
+
+## Fase 4: errores de BI y Auditoria aprobados (2026-11-10, misma rama, sin commit)
+Aprobados por el usuario y corregidos (numeracion de la tabla de errores):
+- 1 Listas recortadas: bajo cada tabla recortada, "Mostrando N de M" y boton con la lista completa en Excel (ui/tabs/analisis_ui.pie_lista).
+- 3 Columnas opcionales: al cargar se reconocen y renombran PVP, Fecha_Caducidad, Ubicacion y Refrigerado (inventario) y PVP/Importe
+  (historico), con aviso de cuales vienen. calcular_riesgo_caducidad cuenta solo stock > 0 y aun no caducado; lo caducado va en
+  calcular_stock_caducado. La matriz de rentabilidad usa el PVP del historico si el inventario no lo trae.
+- 4 Fecha de referencia: business.fecha_corte() = fecha del inventario confirmada. La usan la prevision (meses siguientes), las
+  caducidades y el calendario de reposicion en lugar de "hoy". Zombie, UVI y tendencia siguen anclados al ultimo dia con ventas.
+  Sin fecha confirmada se sigue usando hoy y el sello de datos lo avisa. El motor ML no se ha tocado.
+- 6 Ahorro: el ahorro confirmado sale solo de historico_pedidos.json; el del pedido sugerido se ensena aparte como estimacion.
+- 7 PDF: utils/pdf_informe.py sustituye a utils/pdf_generator.py (borrado). Se elige la farmacia, se genera al pulsar el boton (no en
+  cada rerun), el archivo lleva farmacia y fecha de datos, se guarda copia en la carpeta de la farmacia y usa fuente TrueType (€ y
+  acentos; sin ella cae a Helvetica sin fallar). 5 paginas con la demo: resumen ejecutivo con 3 hallazgos en euros, cascada de
+  capital, ventas interanuales, laboratorios, plan de accion, caducidades, roturas repetidas, compras/descuentos, ABC y metodologia.
+  Graficos dibujados con primitivas de fpdf2 (sin dependencias nuevas). El Health Score NO va en el PDF (decision propia, a confirmar).
+- 8 Zombie y altas: el ERP no da fecha de alta. Un producto sin ninguna venta que aparece por primera vez en una foto de stock
+  reciente (habiendo fotos anteriores sin el) o que consta comprado en los ultimos 12 meses no cuenta como zombie (business.cns_alta_reciente).
+- 9 Donut: solo capital parado (zombie + sobrestock); la venta perdida se muestra aparte en euros/mes.
+- 10 ABC: por ventas de 12 meses en euros (PVP sin IVA si el historico lo trae; si no, PVL), cruzado con stock (analisis.analisis_abc).
+  business.calcular_analisis_abc eliminado.
+Aprobados y corregidos despues (mismo dia), tras explicarlos con un ejemplo:
+- 2 Venta anual del ROI por laboratorio: lo vendido de verdad en los 12 ultimos meses del historico, a PVL
+  (business.ventas_ultimos_12_meses; calcular_roi_laboratorios recibe el historico). Con menos de 12 meses se extrapola y se avisa.
+  Farmacia_Demo_Centro: venta anual 61.994 -> 50.886 EUR (la real); el ROI ya no depende del mes en que se abre la herramienta.
+- 5 Conciliacion: por defecto solo se comparan los productos que vienen en el archivo del conteo y se muestra el alcance
+  ("contados X de Y"). Casilla "He contado toda la farmacia" para tratar lo no contado como faltante. Demo: contar 5 productos
+  exactos daba 8.309 EUR de perdida; ahora 0.
+Sigue sin tocar (no aprobado): la deteccion de la columna de codigo en el archivo del conteo (puede elegir el codigo de barras) y los
+sobrantes de productos fuera de inventario, que se valoran a 0 EUR.
+Decidido despues por el usuario (mismo dia):
+- Venta perdida por roturas a precio de venta (PVP sin IVA) en toda la herramienta: plan, PDF, roturas recurrentes y el KPI de BI y
+  Auditoria (calcular_coste_oportunidad recibe los precios de venta). Sin PVP en los datos, a PVL. El margen perdido se da como dato
+  secundario. Sustituye a la decision del 2026-09-13 de valorarla a PVL.
+- El Health Score SI va en el PDF (pagina 2): nota, barra por zonas, media de la red y evolucion entre visitas (una medicion por dia
+  del historico de KPIs + la de hoy). Ojo: las mediciones guardadas antes del cambio de formula no son comparables con las actuales.
+Verificado: tests/test_analisis.py 18/18, tests/test_ml_engine.py 7/7; AppTest en copia con las dos farmacias sin excepciones; informe
+generado para la farmacia activa y para otra sin cambiar de farmacia, y error claro con una farmacia sin datos; PDF revisado a la vista.

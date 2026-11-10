@@ -88,11 +88,17 @@ Sin `xgboost`/`scikit-learn` la app funciona igual con el motor heurístico.
 
 ```bash
 py -3.14 tests/test_ml_engine.py
+py -3.14 tests/test_analisis.py
 ```
 
 7 pruebas con datos sintéticos que comprueban que el motor no ve el futuro: sin fugas en
 ninguna variable, no aprende de ruido ni de ventas barajadas, gana al baseline con un patrón
 conocido, capta la estacionalidad y predice todos los meses del pedido.
+
+21 pruebas de los análisis de BI y Auditoría (`core/analisis.py`): reglas del plan de acción
+(plazos de devolución, liquidación, traspaso), capital liberable, caducidades, margen con y sin
+IVA, compras y descuentos perdidos, roturas recurrentes, ABC por ventas, altas recientes,
+previsión anclada a la fecha del inventario, exportación a Excel sin recortes e informe PDF.
 
 ## Stack
 

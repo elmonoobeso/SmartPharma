@@ -37,8 +37,8 @@ def grafico_gauge_health(score):
     fig.update_layout(height=280, margin=dict(l=30,r=30,t=50,b=10), paper_bgcolor="rgba(0,0,0,0)", font={"family":"Inter"})
     return fig
 
-def grafico_calendario_reposicion(df_inv, df_ventas_media):
-    """Timeline de fechas estimadas de reposicion por laboratorio."""
+def grafico_calendario_reposicion(df_inv, df_ventas_media, hoy=None):
+    """Timeline de fechas estimadas de reposicion por laboratorio. `hoy`: fecha del inventario (por defecto, hoy)."""
     if COL_LAB not in df_inv.columns:
         return None
     df_m = df_inv.merge(df_ventas_media[[COL_CN, "Venta_Media_Mensual"]], on=COL_CN, how="left")
@@ -50,7 +50,7 @@ def grafico_calendario_reposicion(df_inv, df_ventas_media):
     lab_dias = lab_dias.sort_values("Dias_Stock").head(15)
     if lab_dias.empty:
         return None
-    hoy = date.today()
+    hoy = pd.Timestamp(hoy).date() if hoy is not None else date.today()
     lab_dias["Fecha_Reposicion"] = lab_dias["Dias_Stock"].apply(
         lambda d: (hoy + timedelta(days=max(0, d - 7))).strftime("%d/%m/%Y"))
     lab_dias["Dias_Stock"] = lab_dias["Dias_Stock"].round(0).astype(int)
@@ -168,15 +168,19 @@ def grafico_waterfall_ahorro(pedidos_confirmados):
     return fig
 
 
-def grafico_dinero_en_riesgo_donut(valor_zombie, valor_sobrestock, coste_oportunidad):
-    """Donut chart: composicion instantanea del dinero en riesgo."""
-    labels = ["Capital Zombie", "Sobrestock", "Venta Perdida (est.)"]
-    values = [max(0, valor_zombie), max(0, valor_sobrestock), max(0, coste_oportunidad * 12)]
+def grafico_dinero_en_riesgo_donut(valor_zombie, valor_sobrestock):
+    """Donut del capital parado: stock zombie y sobrestock. Solo dinero que ya esta en la estanteria.
+
+    La venta perdida por roturas no entra: es dinero que deja de entrar cada mes, no stock,
+    y sumarla (anualizada) inflaba el total. Se muestra aparte, en euros al mes.
+    """
+    labels = ["Capital Zombie", "Sobrestock"]
+    values = [max(0, valor_zombie), max(0, valor_sobrestock)]
     total = sum(values)
     if total == 0:
         return None
-    # Mismos colores que el grafico de concentracion de riesgo; venta perdida en gris (es un flujo, no stock)
-    colors_donut = [COLORS["danger"], COLORS["primary"], COLORS["muted"]]
+    # Mismos colores que el grafico de concentracion de riesgo
+    colors_donut = [COLORS["danger"], COLORS["primary"]]
     fig = go.Figure(data=[go.Pie(
         labels=labels, values=values,
         hole=0.55, marker=dict(colors=colors_donut),
@@ -184,7 +188,7 @@ def grafico_dinero_en_riesgo_donut(valor_zombie, valor_sobrestock, coste_oportun
         hovertemplate="<b>%{label}</b><br>%{value:,.0f} EUR<br>%{percent}<extra></extra>",
     )])
     fig.update_layout(
-        title="💰 Dinero en Riesgo", height=350,
+        title="💰 Capital parado", height=350,
         paper_bgcolor="rgba(0,0,0,0)", font={"family": "Inter"},
         annotations=[dict(text=f"{total:,.0f}€", x=0.5, y=0.5, font_size=18,
                           font_family="Inter", font_weight="bold", showarrow=False)],
